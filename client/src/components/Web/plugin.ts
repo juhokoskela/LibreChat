@@ -1,7 +1,14 @@
 import { visit } from 'unist-util-visit';
 import type { Node } from 'unist';
 import type { Citation, CitationNode } from './types';
-import { SPAN_REGEX, STANDALONE_PATTERN, CLEANUP_REGEX, COMPOSITE_REGEX } from '~/utils/citations';
+import {
+  SPAN_REGEX,
+  STANDALONE_PATTERN,
+  CITE_PATTERN,
+  SIMPLE_TURN_PATTERN,
+  CLEANUP_REGEX,
+  COMPOSITE_REGEX,
+} from '~/utils/citations';
 
 /**
  * Checks if a standalone marker is truly standalone (not inside a composite block)
@@ -25,6 +32,8 @@ function findNextMatch(
   SPAN_REGEX.lastIndex = position;
   COMPOSITE_REGEX.lastIndex = position;
   STANDALONE_PATTERN.lastIndex = position;
+  CITE_PATTERN.lastIndex = position;
+  SIMPLE_TURN_PATTERN.lastIndex = position;
 
   // Find next occurrence of each pattern
   const spanMatch = SPAN_REGEX.exec(text);
@@ -41,6 +50,16 @@ function findNextMatch(
       standaloneMatch = match;
     }
   }
+
+  // For cite pattern, find the first occurrence
+  let citeMatch: RegExpExecArray | null = null;
+  CITE_PATTERN.lastIndex = position;
+  citeMatch = CITE_PATTERN.exec(text);
+
+  // For simple turn pattern, find the first occurrence
+  let simpleTurnMatch: RegExpExecArray | null = null;
+  SIMPLE_TURN_PATTERN.lastIndex = position;
+  simpleTurnMatch = SIMPLE_TURN_PATTERN.exec(text);
 
   // Find closest match
   let nextMatch: RegExpExecArray | null = null;
@@ -70,6 +89,20 @@ function findNextMatch(
     typeIndex = 0;
   }
 
+  if (citeMatch && (!nextMatch || citeMatch.index < matchIndex || matchIndex === -1)) {
+    nextMatch = citeMatch;
+    matchType = 'cite';
+    matchIndex = citeMatch.index;
+    typeIndex = 0;
+  }
+
+  if (simpleTurnMatch && (!nextMatch || simpleTurnMatch.index < matchIndex || matchIndex === -1)) {
+    nextMatch = simpleTurnMatch;
+    matchType = 'simple-turn';
+    matchIndex = simpleTurnMatch.index;
+    typeIndex = 0;
+  }
+
   if (!nextMatch) return null;
 
   return { type: matchType, match: nextMatch, index: typeIndex };
@@ -91,7 +124,7 @@ function processTree(tree: Node) {
     // Important change: Create a map to track citation IDs by their position
     // This ensures consistent IDs across multiple segments
     const citationIds = new Map<number, string>();
-    const typeCounts = { span: 0, composite: 0, standalone: 0 };
+    const typeCounts = { span: 0, composite: 0, standalone: 0, cite: 0, 'simple-turn': 0 };
 
     while (currentPosition < originalValue.length) {
       const nextMatchInfo = findNextMatch(originalValue, currentPosition);
@@ -220,6 +253,60 @@ function processTree(tree: Node) {
           });
 
           typeCounts.standalone++;
+          break;
+        }
+
+        case 'cite': {
+          // Extract reference info from cite pattern (e.g., citeturn0file4)
+          const turnPart = match![1]; // e.g., "turn0"
+          const turn = Number(turnPart.replace('turn', ''));
+          const refType = match![2];
+          const refIndex = Number(match![3]);
+
+          segments.push({
+            type: 'citation',
+            data: {
+              hName: 'citation',
+              hProperties: {
+                citation: {
+                  turn,
+                  refType,
+                  index: refIndex,
+                },
+                citationType: 'standalone',
+                citationId: citationId,
+              },
+            },
+          });
+
+          typeCounts.cite++;
+          break;
+        }
+
+        case 'simple-turn': {
+          // Extract reference info from simple turn pattern (e.g., turn0file4)
+          const turnPart = match![1]; // e.g., "turn0"
+          const turn = Number(turnPart.replace('turn', ''));
+          const refType = match![2];
+          const refIndex = Number(match![3]);
+
+          segments.push({
+            type: 'citation',
+            data: {
+              hName: 'citation',
+              hProperties: {
+                citation: {
+                  turn,
+                  refType,
+                  index: refIndex,
+                },
+                citationType: 'standalone',
+                citationId: citationId,
+              },
+            },
+          });
+
+          typeCounts['simple-turn']++;
           break;
         }
       }
