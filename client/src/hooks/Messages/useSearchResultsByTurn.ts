@@ -81,8 +81,9 @@ export function useSearchResultsByTurn(attachments?: TAttachment[]) {
         });
 
         // Convert agent file sources to SearchResultData format
+        const fileSearchTurn = 0; // File search citations always reference turn 0
         const agentSearchData: SearchResultData = {
-          turn: agentFileSearchTurn,
+          turn: fileSearchTurn,
           organic: [], // Agent file search doesn't have organic web results
           topStories: [], // No top stories for file search
           images: [], // No images for file search
@@ -107,8 +108,15 @@ export function useSearchResultsByTurn(attachments?: TAttachment[]) {
           ),
         };
 
-        turnMap[agentFileSearchTurn.toString()] = agentSearchData;
-        agentFileSearchTurn++;
+        // Merge with existing turn 0 data if it exists, or create new entry
+        if (turnMap['0']) {
+          // If turn 0 already has data (e.g., from web search), merge file references
+          const existingReferences = turnMap['0'].references || [];
+          const newReferences = agentSearchData.references || [];
+          turnMap['0'].references = [...existingReferences, ...newReferences];
+        } else {
+          turnMap['0'] = agentSearchData;
+        }
       }
     });
 

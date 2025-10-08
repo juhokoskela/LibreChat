@@ -1,0 +1,143 @@
+services:
+  api:
+    environment:
+      - RAG_API_URL=http://rag_api:8000
+    volumes:
+      - type: bind
+        source: ./librechat.yaml
+        target: /app/librechat.yaml
+      - type: bind
+        source: ./mcp-servers
+        target: /app/mcp-servers
+      - type: bind
+        source: /var/run/docker.sock
+        target: /var/run/docker.sock
+    depends_on:
+      - rag-service
+  
+  slack-mcp:
+    image: ghcr.io/juhokoskela/slack-mcp-server:main
+    container_name: slack-mcp-server
+    environment:
+      - SLACK_MCP_XOXP_TOKEN=${SLACK_MCP_XOXP_TOKEN}
+      - SLACK_MCP_PORT=13080
+      - SLACK_MCP_HOST=0.0.0.0
+    ports:
+      - "13080:13080"
+    restart: unless-stopped
+    command: ["mcp-server", "--transport", "sse"]
+
+  atlassian-mcp:
+    image: ghcr.io/juhokoskela/mcp-atlassian:main
+    container_name: atlassian-mcp-server
+    ports:
+      - "13081:13081"
+    restart: unless-stopped
+    command: [
+      "--transport", "sse",
+      "--host", "0.0.0.0",
+      "--port", "13081",
+      "--verbose",
+      "--confluence-url", "${CONFLUENCE_URL}",
+      "--confluence-username", "${CONFLUENCE_USERNAME}",
+      "--confluence-token", "${CONFLUENCE_API_TOKEN}",
+      "--jira-url", "${JIRA_URL}",
+      "--jira-username", "${JIRA_USERNAME}",
+      "--jira-token", "${JIRA_API_TOKEN}"
+    ]
+
+  pipedrive-mcp:
+    image: ghcr.io/juhokoskela/pipedrive-mcp-server:main
+    container_name: pipedrive-mcp-server
+    environment:
+      - PIPEDRIVE_API_TOKEN=${PIPEDRIVE_API_TOKEN}
+      - PIPEDRIVE_DOMAIN=${PIPEDRIVE_DOMAIN}
+      - MCP_TRANSPORT=sse
+      - MCP_PORT=13082
+    ports:
+      - "13082:13082"
+    restart: unless-stopped
+
+  # New RAG Service with PostgreSQL + pgvector and Redis
+  rag-service:
+    container_name: librechat-rag-service
+    image: ghcr.io/juhokoskela/rag_service:main
+    ports:
+      - "8001:8000"
+    environment:
+      - POSTGRES_USER=${RAG_POSTGRES_USER:-rag_user}
+      - POSTGRES_PASSWORD=${RAG_POSTGRES_PASSWORD:-rag_pass}
+      - POSTGRES_DB=${RAG_POSTGRES_DB:-rag_db}
+      - POSTGRES_HOST=rag-postgres
+      - POSTGRES_PORT=5432
+      - REDIS_HOST=rag-redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+      - REDIS_PASSWORD=
+      - REDIS_SSL=false
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - JINA_API_KEY=${JINA_API_KEY:-}
+      - ENVIRONMENT=development
+      - DEBUG=true
+      - LOG_LEVEL=INFO
+      - CORS_ORIGINS=*
+      - ENABLE_BM25=true
+      - BM25_WEIGHT=${RAG_BM25_WEIGHT:-0.3}
+      - VECTOR_WEIGHT=${RAG_VECTOR_WEIGHT:-0.7}
+      - CHUNK_SIZE=${RAG_CHUNK_SIZE:-800}
+      - CHUNK_OVERLAP=${RAG_CHUNK_OVERLAP:-100}
+      - RATE_LIMIT_PER_MINUTE=60
+      # Zendesk variables (optional)
+      - ZENDESK_SUBDOMAIN=${ZENDESK_SUBDOMAIN:-}
+      - ZENDESK_EMAIL=${ZENDESK_EMAIL:-}
+      - ZENDESK_TOKEN=${ZENDESK_TOKEN:-}
+      - RAG_API_TOKEN=${RAG_API_TOKEN}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf -H \"Authorization: Bearer $RAG_API_TOKEN\" http://localhost:8000/health/ || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    depends_on:
+      rag-postgres:
+        condition: service_healthy
+      rag-redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  rag-postgres:
+    container_name: librechat-rag-postgres
+    build:
+      context: ./mcp-servers/rag_service
+      dockerfile: Dockerfile.postgres
+    ports:
+      - "5433:5432"
+    environment:
+      - POSTGRES_USER=${RAG_POSTGRES_USER:-rag_user}
+      - POSTGRES_PASSWORD=${RAG_POSTGRES_PASSWORD:-rag_pass}
+      - POSTGRES_DB=${RAG_POSTGRES_DB:-rag_db}
+    volumes:
+      - rag_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${RAG_POSTGRES_USER:-rag_user} -d ${RAG_POSTGRES_DB:-rag_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  rag-redis:
+    container_name: librechat-rag-redis
+    image: redis:8.2-alpine
+    ports:
+      - "6380:6379"
+    volumes:
+      - rag_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  rag_postgres_data:
+  rag_redis_data:
