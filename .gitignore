@@ -138,3 +138,7 @@ helm/**/.values.yaml
 /.tabnine/
 /.codeium
 *.local.md
+CLAUDE.md
+
+# Internal system prompt
+ukko-internal-sysprompt.md
