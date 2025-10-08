@@ -1,7 +1,14 @@
 import { visit } from 'unist-util-visit';
 import type { Node } from 'unist';
 import type { Citation, CitationNode } from './types';
-import { SPAN_REGEX, STANDALONE_PATTERN, CITE_PATTERN, SIMPLE_TURN_PATTERN, CLEANUP_REGEX, COMPOSITE_REGEX } from '~/utils/citations';
+import {
+  SPAN_REGEX,
+  STANDALONE_PATTERN,
+  CITE_PATTERN,
+  SIMPLE_TURN_PATTERN,
+  CLEANUP_REGEX,
+  COMPOSITE_REGEX,
+} from '~/utils/citations';
 
 /**
  * Checks if a standalone marker is truly standalone (not inside a composite block)
