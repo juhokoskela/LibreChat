@@ -1,0 +1,474 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: LibreChat - ECS Fargate service running LibreChat, rag_service, and optional MCP servers
+
+Parameters:
+  PublicSubnetIds:
+    Type: CommaDelimitedList
+    Description: Public subnet IDs for Fargate tasks (from 01-network-baseline outputs).
+  AppSecurityGroupId:
+    Type: String
+    Description: Security group that permits ALB traffic to the tasks.
+  TargetGroupArn:
+    Type: String
+    Description: Target group ARN created by 03-ingress-alb.
+  AlbDnsName:
+    Type: String
+    Description: DNS name of the load balancer for DOMAIN_* variables.
+  BucketName:
+    Type: String
+    Default: ''
+    Description: Optional S3 bucket for persistent uploads (from 02-stateful-services).
+  LibreChatImage:
+    Type: String
+    Default: ghcr.io/danny-avila/librechat:latest
+    Description: Container image for the LibreChat application.
+  RagServiceImage:
+    Type: String
+    Default: ghcr.io/juhokoskela/rag_service:main
+    Description: Container image for rag_service.
+  SlackMcpImage:
+    Type: String
+    Default: ghcr.io/juhokoskela/slack-mcp-server:main
+    Description: Container image for the Slack MCP server.
+  AtlassianMcpImage:
+    Type: String
+    Default: ghcr.io/juhokoskela/mcp-atlassian:main
+    Description: Container image for the Atlassian MCP server.
+  PipedriveMcpImage:
+    Type: String
+    Default: ghcr.io/juhokoskela/pipedrive-mcp-server:main
+    Description: Container image for the Pipedrive MCP server.
+  DesiredCount:
+    Type: Number
+    Default: 2
+    Description: Desired number of ECS tasks.
+  TaskCpu:
+    Type: String
+    Default: '2048'
+    Description: CPU units for the task definition.
+  TaskMemory:
+    Type: String
+    Default: '4096'
+    Description: Memory (MiB) for the task definition.
+  EnableRagService:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'true'
+    Description: Whether to run rag_service alongside LibreChat.
+  EnableSlackMcp:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'false'
+    Description: Whether to run the Slack MCP server container.
+  EnableAtlassianMcp:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'false'
+    Description: Whether to run the Atlassian MCP server container.
+  EnablePipedriveMcp:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'false'
+    Description: Whether to run the Pipedrive MCP server container.
+  MongoConnectionSecretArn:
+    Type: String
+    Default: ''
+    Description: Secrets Manager ARN produced by 02-stateful-services containing the MongoDB URI.
+  RedisConnectionSecretArn:
+    Type: String
+    Default: ''
+    Description: Secrets Manager ARN containing the Redis URI for LibreChat (optional).
+  RagPostgresSecretArn:
+    Type: String
+    Default: ''
+    Description: Secrets Manager ARN containing rag_service PostgreSQL credentials.
+  RagRedisSecretArn:
+    Type: String
+    Default: ''
+    Description: Secrets Manager ARN containing rag_service Redis credentials.
+  RagApiTokenSecretArn:
+    Type: String
+    Default: ''
+    Description: Secrets Manager ARN containing the rag_service API token.
+  SlackMcpSecretArn:
+    Type: String
+    Default: ''
+    Description: Secrets Manager ARN containing Slack MCP credentials.
+  AtlassianMcpSecretArn:
+    Type: String
+    Default: ''
+    Description: Secrets Manager ARN containing Atlassian MCP credentials.
+  PipedriveMcpSecretArn:
+    Type: String
+    Default: ''
+    Description: Secrets Manager ARN containing Pipedrive MCP credentials.
+
+Rules:
+  RequireRagSecrets:
+    RuleCondition: !Equals [!Ref EnableRagService, 'true']
+    Assertions:
+      - Assert: !Not [!Equals [!Ref RagPostgresSecretArn, '']]
+        AssertDescription: Provide RagPostgresSecretArn when EnableRagService is true.
+      - Assert: !Not [!Equals [!Ref RagRedisSecretArn, '']]
+        AssertDescription: Provide RagRedisSecretArn when EnableRagService is true.
+      - Assert: !Not [!Equals [!Ref RagApiTokenSecretArn, '']]
+        AssertDescription: Provide RagApiTokenSecretArn when EnableRagService is true.
+  RequireSlackSecret:
+    RuleCondition: !Equals [!Ref EnableSlackMcp, 'true']
+    Assertions:
+      - Assert: !Not [!Equals [!Ref SlackMcpSecretArn, '']]
+        AssertDescription: Provide SlackMcpSecretArn when EnableSlackMcp is true.
+  RequireAtlassianSecret:
+    RuleCondition: !Equals [!Ref EnableAtlassianMcp, 'true']
+    Assertions:
+      - Assert: !Not [!Equals [!Ref AtlassianMcpSecretArn, '']]
+        AssertDescription: Provide AtlassianMcpSecretArn when EnableAtlassianMcp is true.
+  RequirePipedriveSecret:
+    RuleCondition: !Equals [!Ref EnablePipedriveMcp, 'true']
+    Assertions:
+      - Assert: !Not [!Equals [!Ref PipedriveMcpSecretArn, '']]
+        AssertDescription: Provide PipedriveMcpSecretArn when EnablePipedriveMcp is true.
+
+Conditions:
+  HasBucket: !Not [!Equals [!Ref BucketName, '']]
+  HasMongoSecret: !Not [!Equals [!Ref MongoConnectionSecretArn, '']]
+  HasRedisSecret: !Not [!Equals [!Ref RedisConnectionSecretArn, '']]
+  DeployRagService: !Equals [!Ref EnableRagService, 'true']
+  DeploySlackMcp: !Equals [!Ref EnableSlackMcp, 'true']
+  DeployAtlassianMcp: !Equals [!Ref EnableAtlassianMcp, 'true']
+  DeployPipedriveMcp: !Equals [!Ref EnablePipedriveMcp, 'true']
+  NeedsTaskPolicy: !Or
+    - HasBucket
+    - HasMongoSecret
+    - HasRedisSecret
+    - DeployRagService
+    - DeploySlackMcp
+    - DeployAtlassianMcp
+    - DeployPipedriveMcp
+
+Resources:
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /ecs/librechat
+      RetentionInDays: 14
+
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: librechat
+
+  TaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies: !If
+        - NeedsTaskPolicy
+        - - PolicyName: LibreChatTaskAccess
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - !If
+                  - HasBucket
+                  - Sid: FileBucketAccess
+                    Effect: Allow
+                    Action:
+                      - s3:ListBucket
+                    Resource: !Sub 'arn:aws:s3:::${BucketName}'
+                  - !Ref AWS::NoValue
+                - !If
+                  - HasBucket
+                  - Sid: FileObjectAccess
+                    Effect: Allow
+                    Action:
+                      - s3:GetObject
+                      - s3:PutObject
+                      - s3:DeleteObject
+                    Resource: !Sub 'arn:aws:s3:::${BucketName}/*'
+                  - !Ref AWS::NoValue
+                - !If
+                  - HasMongoSecret
+                  - Sid: MongoSecretAccess
+                    Effect: Allow
+                    Action:
+                      - secretsmanager:GetSecretValue
+                    Resource: !Ref MongoConnectionSecretArn
+                  - !Ref AWS::NoValue
+                - !If
+                  - HasRedisSecret
+                  - Sid: RedisSecretAccess
+                    Effect: Allow
+                    Action:
+                      - secretsmanager:GetSecretValue
+                    Resource: !Ref RedisConnectionSecretArn
+                  - !Ref AWS::NoValue
+                - !If
+                  - DeployRagService
+                  - Sid: RagSecretsAccess
+                    Effect: Allow
+                    Action:
+                      - secretsmanager:GetSecretValue
+                    Resource:
+                      - !Ref RagPostgresSecretArn
+                      - !Ref RagRedisSecretArn
+                      - !Ref RagApiTokenSecretArn
+                  - !Ref AWS::NoValue
+                - !If
+                  - DeploySlackMcp
+                  - Sid: SlackSecretAccess
+                    Effect: Allow
+                    Action:
+                      - secretsmanager:GetSecretValue
+                    Resource: !Ref SlackMcpSecretArn
+                  - !Ref AWS::NoValue
+                - !If
+                  - DeployAtlassianMcp
+                  - Sid: AtlassianSecretAccess
+                    Effect: Allow
+                    Action:
+                      - secretsmanager:GetSecretValue
+                    Resource: !Ref AtlassianMcpSecretArn
+                  - !Ref AWS::NoValue
+                - !If
+                  - DeployPipedriveMcp
+                  - Sid: PipedriveSecretAccess
+                    Effect: Allow
+                    Action:
+                      - secretsmanager:GetSecretValue
+                    Resource: !Ref PipedriveMcpSecretArn
+                  - !Ref AWS::NoValue
+        - !Ref AWS::NoValue
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: librechat
+      Cpu: !Ref TaskCpu
+      Memory: !Ref TaskMemory
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt TaskRole.Arn
+      ContainerDefinitions:
+        - Name: librechat
+          Image: !Ref LibreChatImage
+          Essential: true
+          PortMappings:
+            - ContainerPort: 3080
+          Environment:
+            - Name: HOST
+              Value: 0.0.0.0
+            - Name: PORT
+              Value: '3080'
+            - Name: NODE_ENV
+              Value: production
+            - Name: DOMAIN_SERVER
+              Value: !Sub 'https://${AlbDnsName}'
+            - Name: DOMAIN_CLIENT
+              Value: !Sub 'https://${AlbDnsName}'
+            - !If
+              - DeployRagService
+              - Name: RAG_API_URL
+                Value: http://localhost:8000
+              - !Ref AWS::NoValue
+          Secrets:
+            - !If
+              - HasMongoSecret
+              - Name: MONGO_URI
+                ValueFrom: !Sub '${MongoConnectionSecretArn}:uri::'
+              - !Ref AWS::NoValue
+            - !If
+              - HasRedisSecret
+              - Name: REDIS_URI
+                ValueFrom: !Sub '${RedisConnectionSecretArn}:uri::'
+              - !Ref AWS::NoValue
+            - !If
+              - DeployRagService
+              - Name: RAG_API_TOKEN
+                ValueFrom: !Sub '${RagApiTokenSecretArn}:token::'
+              - !Ref AWS::NoValue
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: librechat
+          DependsOn: !If
+            - DeployRagService
+            - - ContainerName: rag-service
+                Condition: START
+            - !Ref AWS::NoValue
+        - !If
+          - DeployRagService
+          - Name: rag-service
+            Image: !Ref RagServiceImage
+            Essential: true
+            PortMappings:
+              - ContainerPort: 8000
+            Environment:
+              - Name: ENVIRONMENT
+                Value: production
+              - Name: LOG_LEVEL
+                Value: INFO
+              - Name: CORS_ORIGINS
+                Value: '*'
+            Secrets:
+              - Name: POSTGRES_USER
+                ValueFrom: !Sub '${RagPostgresSecretArn}:username::'
+              - Name: POSTGRES_PASSWORD
+                ValueFrom: !Sub '${RagPostgresSecretArn}:password::'
+              - Name: POSTGRES_DB
+                ValueFrom: !Sub '${RagPostgresSecretArn}:database::'
+              - Name: POSTGRES_HOST
+                ValueFrom: !Sub '${RagPostgresSecretArn}:host::'
+              - Name: POSTGRES_PORT
+                ValueFrom: !Sub '${RagPostgresSecretArn}:port::'
+              - Name: REDIS_HOST
+                ValueFrom: !Sub '${RagRedisSecretArn}:host::'
+              - Name: REDIS_PORT
+                ValueFrom: !Sub '${RagRedisSecretArn}:port::'
+              - Name: REDIS_PASSWORD
+                ValueFrom: !Sub '${RagRedisSecretArn}:password::'
+              - Name: RAG_API_TOKEN
+                ValueFrom: !Sub '${RagApiTokenSecretArn}:token::'
+            LogConfiguration:
+              LogDriver: awslogs
+              Options:
+                awslogs-group: !Ref LogGroup
+                awslogs-region: !Ref AWS::Region
+                awslogs-stream-prefix: rag-service
+          - !Ref AWS::NoValue
+        - !If
+          - DeploySlackMcp
+          - Name: slack-mcp
+            Image: !Ref SlackMcpImage
+            Essential: false
+            Command: ["mcp-server", "--transport", "sse"]
+            Environment:
+              - Name: SLACK_MCP_PORT
+                Value: '13080'
+              - Name: SLACK_MCP_HOST
+                Value: 0.0.0.0
+            Secrets:
+              - Name: SLACK_MCP_XOXP_TOKEN
+                ValueFrom: !Sub '${SlackMcpSecretArn}:xo_xp_token::'
+            LogConfiguration:
+              LogDriver: awslogs
+              Options:
+                awslogs-group: !Ref LogGroup
+                awslogs-region: !Ref AWS::Region
+                awslogs-stream-prefix: slack-mcp
+          - !Ref AWS::NoValue
+        - !If
+          - DeployAtlassianMcp
+          - Name: atlassian-mcp
+            Image: !Ref AtlassianMcpImage
+            Essential: false
+            Command:
+              - --transport
+              - sse
+              - --host
+              - 0.0.0.0
+              - --port
+              - '13081'
+              - --verbose
+              - --confluence-url
+              - !Sub '{{resolve:secretsmanager:${AtlassianMcpSecretArn}:SecretString:confluence_url}}'
+              - --confluence-username
+              - !Sub '{{resolve:secretsmanager:${AtlassianMcpSecretArn}:SecretString:confluence_username}}'
+              - --confluence-token
+              - !Sub '{{resolve:secretsmanager:${AtlassianMcpSecretArn}:SecretString:confluence_token}}'
+              - --jira-url
+              - !Sub '{{resolve:secretsmanager:${AtlassianMcpSecretArn}:SecretString:jira_url}}'
+              - --jira-username
+              - !Sub '{{resolve:secretsmanager:${AtlassianMcpSecretArn}:SecretString:jira_username}}'
+              - --jira-token
+              - !Sub '{{resolve:secretsmanager:${AtlassianMcpSecretArn}:SecretString:jira_token}}'
+            LogConfiguration:
+              LogDriver: awslogs
+              Options:
+                awslogs-group: !Ref LogGroup
+                awslogs-region: !Ref AWS::Region
+                awslogs-stream-prefix: atlassian-mcp
+          - !Ref AWS::NoValue
+        - !If
+          - DeployPipedriveMcp
+          - Name: pipedrive-mcp
+            Image: !Ref PipedriveMcpImage
+            Essential: false
+            Environment:
+              - Name: MCP_TRANSPORT
+                Value: sse
+              - Name: MCP_PORT
+                Value: '13082'
+            Secrets:
+              - Name: PIPEDRIVE_API_TOKEN
+                ValueFrom: !Sub '${PipedriveMcpSecretArn}:api_token::'
+              - Name: PIPEDRIVE_DOMAIN
+                ValueFrom: !Sub '${PipedriveMcpSecretArn}:domain::'
+            LogConfiguration:
+              LogDriver: awslogs
+              Options:
+                awslogs-group: !Ref LogGroup
+                awslogs-region: !Ref AWS::Region
+                awslogs-stream-prefix: pipedrive-mcp
+          - !Ref AWS::NoValue
+
+  Service:
+    Type: AWS::ECS::Service
+    DependsOn:
+      - LogGroup
+    Properties:
+      Cluster: !Ref Cluster
+      ServiceName: librechat
+      LaunchType: FARGATE
+      TaskDefinition: !Ref TaskDefinition
+      DesiredCount: !Ref DesiredCount
+      DeploymentConfiguration:
+        DeploymentCircuitBreaker:
+          Enable: true
+          Rollback: true
+        MaximumPercent: 200
+        MinimumHealthyPercent: 50
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          SecurityGroups:
+            - !Ref AppSecurityGroupId
+          Subnets: !Ref PublicSubnetIds
+      LoadBalancers:
+        - ContainerName: librechat
+          ContainerPort: 3080
+          TargetGroupArn: !Ref TargetGroupArn
+
+Outputs:
+  ClusterName:
+    Description: ECS cluster name
+    Value: !Ref Cluster
+    Export:
+      Name: !Sub '${AWS::StackName}:ClusterName'
+  ServiceName:
+    Description: ECS service name
+    Value: !Ref Service
+    Export:
+      Name: !Sub '${AWS::StackName}:ServiceName'

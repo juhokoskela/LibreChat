@@ -1,0 +1,101 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: LibreChat - Internet-facing Application Load Balancer with HTTPS
+
+Parameters:
+  VpcId:
+    Type: String
+    Description: VPC ID from 01-network-baseline.
+  PublicSubnetIds:
+    Type: CommaDelimitedList
+    Description: Public subnet IDs where the ALB will live (typically from 01-network-baseline).
+  AlbSecurityGroupId:
+    Type: String
+    Description: Security group that allows inbound HTTP/S traffic (from 01-network-baseline).
+  CertificateArn:
+    Type: String
+    Description: ACM certificate ARN in the same region/account as the ALB.
+  HealthCheckPath:
+    Type: String
+    Default: /
+    Description: Path for ALB health checks.
+  TargetPort:
+    Type: Number
+    Default: 3080
+    Description: Port that the LibreChat service listens on.
+
+Resources:
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Type: application
+      Scheme: internet-facing
+      IpAddressType: ipv4
+      Subnets: !Ref PublicSubnetIds
+      SecurityGroups:
+        - !Ref AlbSecurityGroupId
+      LoadBalancerAttributes:
+        - Key: routing.http2.enabled
+          Value: 'true'
+        - Key: access_logs.s3.enabled
+          Value: 'false'
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: !Ref VpcId
+      Port: !Ref TargetPort
+      Protocol: HTTP
+      TargetType: ip
+      HealthCheckIntervalSeconds: 30
+      HealthCheckPath: !Ref HealthCheckPath
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+
+  HttpListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: redirect
+          RedirectConfig:
+            Protocol: HTTPS
+            Port: '443'
+            StatusCode: HTTP_301
+
+  HttpsListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 443
+      Protocol: HTTPS
+      Certificates:
+        - CertificateArn: !Ref CertificateArn
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+Outputs:
+  LoadBalancerArn:
+    Description: ARN of the Application Load Balancer
+    Value: !Ref LoadBalancer
+    Export:
+      Name: !Sub '${AWS::StackName}:LoadBalancerArn'
+  LoadBalancerDnsName:
+    Description: DNS name for the ALB
+    Value: !GetAtt LoadBalancer.DNSName
+    Export:
+      Name: !Sub '${AWS::StackName}:LoadBalancerDnsName'
+  LoadBalancerHostedZoneId:
+    Description: Route 53 hosted zone ID for alias records
+    Value: !GetAtt LoadBalancer.CanonicalHostedZoneID
+    Export:
+      Name: !Sub '${AWS::StackName}:LoadBalancerHostedZoneId'
+  TargetGroupArn:
+    Description: Target group that receives traffic from the ALB
+    Value: !Ref TargetGroup
+    Export:
+      Name: !Sub '${AWS::StackName}:TargetGroupArn'
