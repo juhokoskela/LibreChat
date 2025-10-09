@@ -1,0 +1,148 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: LibreChat - Baseline VPC networking with public subnets and security groups
+
+Parameters:
+  VpcCidr:
+    Type: String
+    Default: 10.0.0.0/16
+    Description: CIDR block for the new VPC.
+  PublicSubnet1Cidr:
+    Type: String
+    Default: 10.0.1.0/24
+    Description: CIDR block for the first public subnet.
+  PublicSubnet2Cidr:
+    Type: String
+    Default: 10.0.2.0/24
+    Description: CIDR block for the second public subnet.
+  AvailabilityZone1:
+    Type: String
+    Default: ''
+    Description: Optional specific AZ for the first subnet (leave blank for automatic selection).
+  AvailabilityZone2:
+    Type: String
+    Default: ''
+    Description: Optional specific AZ for the second subnet (leave blank for automatic selection).
+
+Conditions:
+  HasAz1: !Not [!Equals [!Ref AvailabilityZone1, '']]
+  HasAz2: !Not [!Equals [!Ref AvailabilityZone2, '']]
+
+Resources:
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: librechat-vpc
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+
+  VPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref VPC
+
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PublicSubnet1Cidr
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !If [HasAz1, !Ref AvailabilityZone1, !Select [0, !GetAZs '']]
+      Tags:
+        - Key: Name
+          Value: librechat-public-1
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PublicSubnet2Cidr
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !If [HasAz2, !Ref AvailabilityZone2, !Select [1, !GetAZs '']]
+      Tags:
+        - Key: Name
+          Value: librechat-public-2
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet1Association:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet1
+
+  PublicSubnet2Association:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet2
+
+  AlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow HTTP/S inbound to the load balancer
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+
+  AppSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow LibreChat tasks to receive traffic from the ALB
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3080
+          ToPort: 3080
+          SourceSecurityGroupId: !Ref AlbSecurityGroup
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+
+Outputs:
+  VpcId:
+    Description: Identifier of the created VPC
+    Value: !Ref VPC
+    Export:
+      Name: !Sub '${AWS::StackName}:VpcId'
+  PublicSubnetIds:
+    Description: Comma-separated list of public subnets
+    Value: !Join [',', [!Ref PublicSubnet1, !Ref PublicSubnet2]]
+    Export:
+      Name: !Sub '${AWS::StackName}:PublicSubnetIds'
+  AlbSecurityGroupId:
+    Description: Security group used by the Application Load Balancer
+    Value: !Ref AlbSecurityGroup
+    Export:
+      Name: !Sub '${AWS::StackName}:AlbSecurityGroupId'
+  AppSecurityGroupId:
+    Description: Security group assigned to LibreChat tasks
+    Value: !Ref AppSecurityGroup
+    Export:
+      Name: !Sub '${AWS::StackName}:AppSecurityGroupId'

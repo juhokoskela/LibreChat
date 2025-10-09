@@ -1,0 +1,47 @@
+{
+  "01-network-baseline": {
+    "VpcCidr": "10.1.0.0/16",
+    "PublicSubnet1Cidr": "10.1.1.0/24",
+    "PublicSubnet2Cidr": "10.1.2.0/24",
+    "AvailabilityZone1": "",
+    "AvailabilityZone2": ""
+  },
+  "02-stateful-services": {
+    "BucketName": ""
+  },
+  "03-ingress-alb": {
+    "VpcId": "vpc-yyyyyyyy",
+    "PublicSubnetIds": "subnet-cccc3333,subnet-dddd4444",
+    "AlbSecurityGroupId": "sg-cccccccc",
+    "CertificateArn": "arn:aws:acm:region:account:certificate/yyyyyyyy-yyyy-yyyy-yyyy-yyyyyyyyyyyy",
+    "HealthCheckPath": "/",
+    "TargetPort": "3080"
+  },
+  "04-compute-ecs": {
+    "PublicSubnetIds": "subnet-cccc3333,subnet-dddd4444",
+    "AppSecurityGroupId": "sg-dddddddd",
+    "TargetGroupArn": "arn:aws:elasticloadbalancing:region:account:targetgroup/librechat/xxxxxxxxxxxxxxxx",
+    "AlbDnsName": "librechat-alb-yyyyyyyy.region.elb.amazonaws.com",
+    "BucketName": "librechat-files-prod",
+    "LibreChatImage": "ghcr.io/danny-avila/librechat:latest",
+    "RagServiceImage": "ghcr.io/juhokoskela/rag_service:main",
+    "SlackMcpImage": "ghcr.io/juhokoskela/slack-mcp-server:main",
+    "AtlassianMcpImage": "ghcr.io/juhokoskela/mcp-atlassian:main",
+    "PipedriveMcpImage": "ghcr.io/juhokoskela/pipedrive-mcp-server:main",
+    "DesiredCount": "2",
+    "TaskCpu": "4096",
+    "TaskMemory": "8192",
+    "EnableRagService": "true",
+    "EnableSlackMcp": "true",
+    "EnableAtlassianMcp": "true",
+    "EnablePipedriveMcp": "false",
+    "MongoConnectionSecretArn": "arn:aws:secretsmanager:region:account:secret:MongoConnectionSecret-yyyyyyyy",
+    "RedisConnectionSecretArn": "arn:aws:secretsmanager:region:account:secret:RedisConnectionSecret-yyyyyyyy",
+    "RagPostgresSecretArn": "arn:aws:secretsmanager:region:account:secret:RagPostgresSecret-yyyyyyyy",
+    "RagRedisSecretArn": "arn:aws:secretsmanager:region:account:secret:RagRedisSecret-yyyyyyyy",
+    "RagApiTokenSecretArn": "arn:aws:secretsmanager:region:account:secret:RagApiTokenSecret-yyyyyyyy",
+    "SlackMcpSecretArn": "arn:aws:secretsmanager:region:account:secret:SlackMcpSecret-yyyyyyyy",
+    "AtlassianMcpSecretArn": "arn:aws:secretsmanager:region:account:secret:AtlassianMcpSecret-yyyyyyyy",
+    "PipedriveMcpSecretArn": "arn:aws:secretsmanager:region:account:secret:PipedriveMcpSecret-yyyyyyyy"
+  }
+}

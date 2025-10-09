@@ -1,0 +1,163 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: LibreChat - Core stateful resources (S3 bucket and Secrets Manager entries)
+
+Parameters:
+  BucketName:
+    Type: String
+    Default: ''
+    Description: Optional explicit bucket name (leave blank to auto-generate).
+
+Conditions:
+  HasBucketName: !Not [!Equals [!Ref BucketName, '']]
+
+Resources:
+  FileStorageBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !If [HasBucketName, !Ref BucketName, !Ref AWS::NoValue]
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  EnforceTlsPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref FileStorageBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyNonTls
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !Sub '${FileStorageBucket.Arn}'
+              - !Sub '${FileStorageBucket.Arn}/*'
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+
+  MongoConnectionSecret:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Description: MongoDB connection string for LibreChat (update with Atlas or DocumentDB URI).
+      SecretString: '{"uri":""}'
+
+  RedisConnectionSecret:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Description: Redis connection information for LibreChat caching (optional).
+      SecretString: '{"uri":""}'
+
+  RagPostgresSecret:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Description: Connection details for the rag_service PostgreSQL database.
+      SecretString: '{"username":"rag_user","password":"change_me","host":"","port":"5432","database":"rag_db"}'
+
+  RagRedisSecret:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Description: Connection details for the rag_service Redis instance.
+      SecretString: '{"host":"","port":"6379","password":""}'
+
+  RagApiTokenSecret:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Description: Bearer token that LibreChat uses to authenticate against rag_service.
+      GenerateSecretString:
+        SecretStringTemplate: '{"token":""}'
+        GenerateStringKey: token
+        PasswordLength: 32
+        ExcludePunctuation: true
+
+  SlackMcpSecret:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Description: Credentials for the Slack MCP server.
+      SecretString: '{"xo_xp_token":""}'
+
+  AtlassianMcpSecret:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Description: Credentials for the Atlassian MCP server (Confluence/Jira).
+      SecretString: '{"confluence_url":"","confluence_username":"","confluence_token":"","jira_url":"","jira_username":"","jira_token":""}'
+
+  PipedriveMcpSecret:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Description: Credentials for the Pipedrive MCP server.
+      SecretString: '{"api_token":"","domain":""}'
+
+Outputs:
+  BucketName:
+    Description: S3 bucket that stores LibreChat uploads
+    Value: !Ref FileStorageBucket
+    Export:
+      Name: !Sub '${AWS::StackName}:BucketName'
+  MongoConnectionSecretArn:
+    Description: Secrets Manager ARN for the MongoDB connection string
+    Value: !Ref MongoConnectionSecret
+    Export:
+      Name: !Sub '${AWS::StackName}:MongoConnectionSecretArn'
+  RedisConnectionSecretArn:
+    Description: Secrets Manager ARN for the Redis connection string
+    Value: !Ref RedisConnectionSecret
+    Export:
+      Name: !Sub '${AWS::StackName}:RedisConnectionSecretArn'
+  RagPostgresSecretArn:
+    Description: Secrets Manager ARN for rag_service PostgreSQL credentials
+    Value: !Ref RagPostgresSecret
+    Export:
+      Name: !Sub '${AWS::StackName}:RagPostgresSecretArn'
+  RagRedisSecretArn:
+    Description: Secrets Manager ARN for rag_service Redis credentials
+    Value: !Ref RagRedisSecret
+    Export:
+      Name: !Sub '${AWS::StackName}:RagRedisSecretArn'
+  RagApiTokenSecretArn:
+    Description: Secrets Manager ARN for the rag_service API token
+    Value: !Ref RagApiTokenSecret
+    Export:
+      Name: !Sub '${AWS::StackName}:RagApiTokenSecretArn'
+  SlackMcpSecretArn:
+    Description: Secrets Manager ARN for Slack MCP credentials
+    Value: !Ref SlackMcpSecret
+    Export:
+      Name: !Sub '${AWS::StackName}:SlackMcpSecretArn'
+  AtlassianMcpSecretArn:
+    Description: Secrets Manager ARN for Atlassian MCP credentials
+    Value: !Ref AtlassianMcpSecret
+    Export:
+      Name: !Sub '${AWS::StackName}:AtlassianMcpSecretArn'
+  PipedriveMcpSecretArn:
+    Description: Secrets Manager ARN for Pipedrive MCP credentials
+    Value: !Ref PipedriveMcpSecret
+    Export:
+      Name: !Sub '${AWS::StackName}:PipedriveMcpSecretArn'
